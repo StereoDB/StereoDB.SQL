@@ -87,9 +87,13 @@ module internal QueryBuilder =
         member this.TryGetTable tableName = 
             let schemaProperty = schemaType.GetProperty(tableName)
             if not (isNull schemaProperty) then
+                let propertyType = schemaProperty.PropertyType
+                let propertyTypeInterfaces = propertyType.GetInterfaces()
                 let tableEntityType = schemaProperty.PropertyType.GenericTypeArguments[0].GenericTypeArguments[1]
-                let keyType = tableEntityType.GetInterfaces() |> Seq.find (fun ifType -> ifType.Name = "IEntity`1")
-                Some (schemaProperty, tableEntityType, keyType.GenericTypeArguments[0])
+                let keyType = schemaProperty.PropertyType.GenericTypeArguments[0].GenericTypeArguments[0]
+                Some (schemaProperty, tableEntityType, keyType)
+                //let keyType = tableEntityType.GetInterfaces() |> Seq.find (fun ifType -> ifType.Name = "ITable`1")
+                //Some (schemaProperty, tableEntityType, keyType.GenericTypeArguments[0])
             else None
         
         member this.GetTable tableName = 
