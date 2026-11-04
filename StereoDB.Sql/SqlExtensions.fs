@@ -30,7 +30,9 @@ module SqlExtensions =
             let query = SqlParser.parseSql sql
             this.ReadTransaction(fun (_rCtx) -> 
                 let func = QueryBuilder.buildQuery<'TSchema, 'TResult> query _rCtx _rCtx.Schema
-                readQueryExecution _rCtx func)              
-    
-        // abstract ExecSql: transaction:(ReadOnlyTsContext<'TSchema> * string) -> ResizeArray<'TResult> voption
-        // abstract ExecSql: transaction:(ReadWriteTsContext<'TSchema> * string) -> unit
+                readQueryExecution _rCtx func)
+
+        member this.ExecSqlWithContext<'TResult>(context: ReadOnlyTsContext<'TSchema>, sql: string): ResizeArray<'TResult> voption =
+            let query = SqlParser.parseSql sql
+            let func = QueryBuilder.buildQuery<'TSchema, 'TResult> query context context.Schema
+            readQueryExecution context func
