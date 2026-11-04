@@ -92,8 +92,6 @@ module internal QueryBuilder =
                 let tableEntityType = schemaProperty.PropertyType.GenericTypeArguments[0].GenericTypeArguments[1]
                 let keyType = schemaProperty.PropertyType.GenericTypeArguments[0].GenericTypeArguments[0]
                 Some (schemaProperty, tableEntityType, keyType)
-                //let keyType = tableEntityType.GetInterfaces() |> Seq.find (fun ifType -> ifType.Name = "ITable`1")
-                //Some (schemaProperty, tableEntityType, keyType.GenericTypeArguments[0])
             else None
         
         member this.GetTable tableName = 
@@ -272,6 +270,7 @@ module internal QueryBuilder =
         match query with
         | SelectQuery (sel, body) ->
             let resultsetType = typeof<System.Collections.Generic.List<'TResult>>
+            // Build Select projection
             // let resutlt = List<'TResult>()
             // 
             // let selectProjection = fun row -> (row.Title)
@@ -475,7 +474,8 @@ module internal QueryBuilder =
                 //   ()
                 // OR
                 // let updateProjection = fun row -> 
-                //   activeTable.Set({ row with Quantity = 100 })
+                //   let rowid = row.Id
+                //   activeTable.Set(rowid, { row with Quantity = 100 })
                 //   ()
                 let row = Expression.Parameter(tableEntityType, "row");
 
@@ -503,7 +503,9 @@ module internal QueryBuilder =
                                 )
                         let constructor = tableEntityType.GetConstructors() |> Seq.head
                         let createNew = Expression.New(constructor, constructorParameters)
-                        Expression.Call(actualTable, setMethod, createNew)
+                        let idProperty = metadata.GetTableColumn(tableName, "Id")
+                        let idColumnExpression = Expression.Property(row, idProperty)
+                        Expression.Call(actualTable, setMethod, idColumnExpression, createNew)
 
                 let updateLambdaType = (typeof<System.Action<_>>).GetGenericTypeDefinition().MakeGenericType(tableEntityType)
                 let updateProjectionExpresion = Expression.Lambda (updateLambdaType, updateBlock, row)
