@@ -32,6 +32,8 @@ module SqlExtensions =
                 let func = QueryBuilder.buildQuery<'TSchema, 'TResult> query _rCtx _rCtx.Schema
                 readQueryExecution _rCtx func)
 
+        // Executes a SQL query with the provided context and returns the result as a ResizeArray<'TResult> voption.
+        // StereoDB.SQL assumes cooperative transaction management, so the context is passed to the query execution function.
         member this.ExecSqlWithContext<'TResult>(context: ReadOnlyTsContext<'TSchema>, sql: string): ResizeArray<'TResult> voption =
             let query = SqlParser.parseSql sql
             let func = QueryBuilder.buildQuery<'TSchema, 'TResult> query context context.Schema
