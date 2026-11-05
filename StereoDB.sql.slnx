@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="StereoDB.Sql/StereoDB.Sql.fsproj" />
+  <Project Path="StereoDB.Sql.Tests/StereoDB.Sql.Tests.fsproj" />
+</Solution>
