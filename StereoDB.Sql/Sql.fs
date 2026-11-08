@@ -77,9 +77,9 @@ module Expr =
 module internal QueryBuilder =
     open SqlParser
 
-    type QueryExecution<'TSchema> =
-        | Write of System.Action<ReadWriteTsContext<'TSchema>>
-        | Read of System.Func<ReadOnlyTsContext<'TSchema>, obj>
+    type QueryExecution =
+        | Write of System.Delegate
+        | Read of System.Delegate
 
     type SchemaMetadata(schema) =
         let schemaType = schema.GetType()
@@ -446,7 +446,7 @@ module internal QueryBuilder =
                 let letFunction = Expression.Block([| result; actualTable; tableScan |], actualTableAssignment, tableScanAssignment, resultAssignment, addRangeCall, result)
                 let resultLambdaType = typeof<System.Func<ReadOnlyTsContext<'TSchema>, obj>>
                 let readTransaction = Expression.Lambda (resultLambdaType, letFunction, context)
-                Read (readTransaction.Compile() :?> System.Func<ReadOnlyTsContext<'TSchema>, obj>)
+                Read (readTransaction.Compile())
             | None -> failwith "SELECT without FROM not yet supported"
         | UpdateQuery (tableNameOrAlias, set, fromClause, whereClause) ->
             let tableName =
@@ -553,7 +553,7 @@ module internal QueryBuilder =
             let resultLambdaType = typeof<System.Action<ReadWriteTsContext<'TSchema>>>
             let writeTransaction = Expression.Lambda (resultLambdaType, letFunction, context)
             
-            Write (writeTransaction.Compile() :?> System.Action<ReadWriteTsContext<'TSchema>>)
+            Write (writeTransaction.Compile())
         | DeleteQuery (tableNameOrAlias, fromClause, whereClause) ->
             let tableName =
                 match fromClause with
@@ -632,4 +632,4 @@ module internal QueryBuilder =
             let resultLambdaType = typeof<System.Action<ReadWriteTsContext<'TSchema>>>
             let writeTransaction = Expression.Lambda (resultLambdaType, letFunction, context)
             
-            Write (writeTransaction.Compile() :?> System.Action<ReadWriteTsContext<'TSchema>>)
+            Write (writeTransaction.Compile())
