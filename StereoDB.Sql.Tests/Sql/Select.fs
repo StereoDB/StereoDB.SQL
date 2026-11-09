@@ -86,6 +86,67 @@ let ``Select filtered rows`` () = task {
 
     let booksCount7 = (db.ExecSql<SubBook> ("SELECT Id, Quantity FROM Books WHERE Id > ?", 3)).Value.Count
     test <@ booksCount7 = 7 @>
+
+    let booksCount8 = (db.ExecSql<SubBook> ("SELECT Id, Quantity FROM Books WHERE Id > (? + 4)", 3)).Value.Count
+    test <@ booksCount8 = 3 @>
+}
+
+[<Fact>]
+let ``Arithmetic operations`` () = task {
+    let db = StereoDb.create(Schema(), StereoDbSettings.Default)
+    
+    // add books
+    db.WriteTransaction(fun ctx ->
+        let books = ctx.UseTable(ctx.Schema.NullableBooks.Table)
+        
+        for i in [1..25] do
+            let book = { 
+                Id = i; 
+                Title = $"book_{i}"; 
+                OptionalValue = if (i % 2 = 0) then Option.None else Option.Some i;
+                NullableValueType = if (i % 3 = 0) then System.Nullable() else System.Nullable i;
+                NullableRefType = if (i % 5 = 0) then null else i.ToString();
+            }
+            books.Set book
+    )
+
+    let books = (db.ExecSql<BookTitle> "SELECT Id, Title FROM NullableBooks WHERE Id = 1 + 2").Value
+    test <@ books[0].Id = 3 @>
+
+    let books = (db.ExecSql<BookTitle> "SELECT Id, Title FROM NullableBooks WHERE Id = 10 - 2").Value
+    test <@ books[0].Id = 8 @>
+
+    let books = (db.ExecSql<BookTitle> "SELECT Id, Title FROM NullableBooks WHERE Id = 2 * 2").Value
+    test <@ books[0].Id = 4 @>
+
+    let books = (db.ExecSql<BookTitle> "SELECT Id, Title FROM NullableBooks WHERE Id = 14 / 2").Value
+    test <@ books[0].Id = 7 @>
+
+    // Parameters on the right
+    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = 1 + ?", 2)).Value
+    test <@ books[0].Id = 3 @>
+
+    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = 10 - ?", 2)).Value
+    test <@ books[0].Id = 8 @>
+
+    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = 2 * ?", 2)).Value
+    test <@ books[0].Id = 4 @>
+
+    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = 14 / ?", 2)).Value
+    test <@ books[0].Id = 7 @>
+
+    // Parameters on the left
+    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = ? + 2", 1)).Value
+    test <@ books[0].Id = 3 @>
+
+    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = ? - 2", 10)).Value
+    test <@ books[0].Id = 8 @>
+
+    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = ? * 2", 2)).Value
+    test <@ books[0].Id = 4 @>
+
+    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = ? / 2", 14)).Value
+    test <@ books[0].Id = 7 @>
 }
 
 [<Fact>]
