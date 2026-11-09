@@ -51,6 +51,7 @@ module internal SqlParser =
         | SqlIntConstant   of int64
         | SqlFloatConstant of float
         | SqlIdentifier    of string option * string
+        | SqlUnnamedBinding
         
     type SqlExpression = 
         | BinaryArithmeticOperator of SqlExpression * string * SqlExpression
@@ -95,7 +96,8 @@ module internal SqlParser =
     let SQL_INT_CONSTANT = int_ws |>> SqlIntConstant
     let SQL_FLOAT_CONSTANT = float_ws |>> SqlFloatConstant
     let SQL_IDENTIFIER = identifier .>>. opt (str_ws "." >>. identifier) |>> unwrap_identifier |>> SqlIdentifier
-    let SQL_EXPRESSION = SQL_INT_CONSTANT <|> SQL_FLOAT_CONSTANT <|> SQL_IDENTIFIER |>> Primitive
+    let SQL_UNNAMED_BINDING = str_ws "?" |>> (fun _ -> SqlUnnamedBinding)
+    let SQL_EXPRESSION = SQL_INT_CONSTANT <|> SQL_FLOAT_CONSTANT <|> SQL_IDENTIFIER <|> SQL_UNNAMED_BINDING |>> Primitive
 
     let arithOpp = new OperatorPrecedenceParser<SqlExpression,unit,unit>()
     let arithExpr = arithOpp.ExpressionParser
