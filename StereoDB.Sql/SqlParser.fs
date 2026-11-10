@@ -124,10 +124,10 @@ module internal SqlParser =
     let SQL_LOGICAL_EXPRESSION = logicOpp.ExpressionParser
     let logicalOperator = str_ws "=" <|> str_ws "<=" <|> str_ws ">=" <|> str_ws "<>" <|> str_ws ">" <|> str_ws "<"
     let primitiveLogicalExpression =
-        (arithExpr .>>? strCI_ws "IS" .>>? strCI_ws "NULL" |>> IsNull)
-        <|> (arithExpr .>>? strCI_ws "IS" .>>? strCI_ws "NOT" .>> strCI_ws "NULL" |>> IsNotNull)
-        <|> (arithExpr .>>? strCI_ws "BETWEEN" .>>. arithExpr .>>? strCI_ws "AND" .>>. arithExpr |>> flatten |>> Between)
-        <|> (arithExpr .>>.? logicalOperator .>>. arithExpr |>> flatten |>> BinaryComparisonOperator)
+        (SQL_EXPRESSION .>>? strCI_ws "IS" .>>? strCI_ws "NULL" |>> IsNull)
+        <|> (SQL_EXPRESSION .>>? strCI_ws "IS" .>>? strCI_ws "NOT" .>> strCI_ws "NULL" |>> IsNotNull)
+        <|> (SQL_EXPRESSION .>>? strCI_ws "BETWEEN" .>>. SQL_EXPRESSION .>>? strCI_ws "AND" .>>. SQL_EXPRESSION |>> flatten |>> Between)
+        <|> (SQL_EXPRESSION .>>.? logicalOperator .>>. SQL_EXPRESSION |>> flatten |>> BinaryComparisonOperator)
     let logicExpressionTerm = (primitiveLogicalExpression) <|> between (str_ws "(") (str_ws ")") SQL_LOGICAL_EXPRESSION
     logicOpp.TermParser <- logicExpressionTerm
 

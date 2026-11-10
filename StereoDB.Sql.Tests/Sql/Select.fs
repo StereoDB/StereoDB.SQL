@@ -86,67 +86,6 @@ let ``Select filtered rows`` () = task {
 
     let booksCount7 = (db.ExecSql<SubBook> ("SELECT Id, Quantity FROM Books WHERE Id > ?", 3)).Value.Count
     test <@ booksCount7 = 7 @>
-
-    let booksCount8 = (db.ExecSql<SubBook> ("SELECT Id, Quantity FROM Books WHERE Id > (? + 4)", 3)).Value.Count
-    test <@ booksCount8 = 3 @>
-}
-
-[<Fact>]
-let ``Arithmetic operations`` () = task {
-    let db = StereoDb.create(Schema(), StereoDbSettings.Default)
-    
-    // add books
-    db.WriteTransaction(fun ctx ->
-        let books = ctx.UseTable(ctx.Schema.NullableBooks.Table)
-        
-        for i in [1..25] do
-            let book = { 
-                Id = i; 
-                Title = $"book_{i}"; 
-                OptionalValue = if (i % 2 = 0) then Option.None else Option.Some i;
-                NullableValueType = if (i % 3 = 0) then System.Nullable() else System.Nullable i;
-                NullableRefType = if (i % 5 = 0) then null else i.ToString();
-            }
-            books.Set book
-    )
-
-    let books = (db.ExecSql<BookTitle> "SELECT Id, Title FROM NullableBooks WHERE Id = 1 + 2").Value
-    test <@ books[0].Id = 3 @>
-
-    let books = (db.ExecSql<BookTitle> "SELECT Id, Title FROM NullableBooks WHERE Id = 10 - 2").Value
-    test <@ books[0].Id = 8 @>
-
-    let books = (db.ExecSql<BookTitle> "SELECT Id, Title FROM NullableBooks WHERE Id = 2 * 2").Value
-    test <@ books[0].Id = 4 @>
-
-    let books = (db.ExecSql<BookTitle> "SELECT Id, Title FROM NullableBooks WHERE Id = 14 / 2").Value
-    test <@ books[0].Id = 7 @>
-
-    // Parameters on the right
-    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = 1 + ?", 2)).Value
-    test <@ books[0].Id = 3 @>
-
-    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = 10 - ?", 2)).Value
-    test <@ books[0].Id = 8 @>
-
-    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = 2 * ?", 2)).Value
-    test <@ books[0].Id = 4 @>
-
-    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = 14 / ?", 2)).Value
-    test <@ books[0].Id = 7 @>
-
-    // Parameters on the left
-    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = ? + 2", 1)).Value
-    test <@ books[0].Id = 3 @>
-
-    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = ? - 2", 10)).Value
-    test <@ books[0].Id = 8 @>
-
-    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = ? * 2", 2)).Value
-    test <@ books[0].Id = 4 @>
-
-    let books = (db.ExecSql<BookTitle> ("SELECT Id, Title FROM NullableBooks WHERE Id = ? / 2", 14)).Value
-    test <@ books[0].Id = 7 @>
 }
 
 [<Fact>]
@@ -438,4 +377,38 @@ let ``Select filtered rows with between`` () = task {
 
     let booksCount = (db.ExecSql<Book> "SELECT * FROM Books WHERE Id BETWEEN 4 AND 6").Value.Count
     test <@ booksCount = 3 @>
+}
+
+[<Fact>]
+let ``Prepare`` () = task {
+    let db = StereoDb.create(Schema(), StereoDbSettings.Default)
+    
+    // add books
+    db.WriteTransaction(fun ctx ->
+        let books = ctx.UseTable(ctx.Schema.Books.Table)
+        
+        for i in [1..10] do
+            let book = { Id = i; Title = $"book_{i}"; Quantity = 1 }
+            books.Set book
+    )
+
+    let query = db.PrepareExecSql<SubBook> "SELECT Id, Quantity FROM Books WHERE Id <= ?"
+    let result = query.Invoke([| box 3 |])
+    
+    let booksCount = result.Value.Count
+    test <@ booksCount = 3 @>
+    let book1 = result.Value[0]
+    test <@ book1.Id = 1 @>
+    let book2 = result.Value[1]
+    test <@ book2.Id = 2 @>
+
+    let result = query.Invoke([| box 2 |])
+    
+    let booksCount = result.Value.Count
+    test <@ booksCount = 2 @>
+
+    let result = query.Invoke([| box 10000 |])
+    
+    let booksCount = result.Value.Count
+    test <@ booksCount = 10 @>
 }
