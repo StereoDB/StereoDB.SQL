@@ -222,7 +222,19 @@ module internal QueryBuilder =
 
         member this.buildExpression executionContext row expression :Expression =
             match expression with
-            | BinaryArithmeticOperator (left, op, right) -> failwith "Not implemented"
+            | BinaryArithmeticOperator (left, op, right) -> 
+                let leftType = this.GetExpressionType(left)
+                let rightType = this.GetExpressionType(right)
+                let leftExpression = this.buildExpression executionContext row left
+                let rightExpression = this.buildExpression executionContext row right
+                let leftExpression: Expression = if leftType = typeof<obj> then Expression.Convert(leftExpression, rightType) else leftExpression
+                let rightExpression: Expression = if rightType = typeof<obj> then Expression.Convert(rightExpression, leftType) else rightExpression
+                match op with
+                | "+" -> Expression.Add(leftExpression, rightExpression)
+                | "-" -> Expression.Subtract(leftExpression, rightExpression)
+                | "*" -> Expression.Multiply(leftExpression, rightExpression)
+                | "/" -> Expression.Divide(leftExpression, rightExpression)
+                | _ -> failwith $"Operator {op} is not implemented"
             | UnaryArithmeticOperator (op, expr) -> failwith "Not implemented"
             | Primitive primitive ->
                 match primitive with
