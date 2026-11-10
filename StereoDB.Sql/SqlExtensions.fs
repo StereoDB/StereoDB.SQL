@@ -18,12 +18,11 @@ module SqlExtensions =
 
     let internal writeQueryExecution (context: ReadWriteTsContext<'TSchema>) (func:QueryBuilder.QueryExecution) (parameters: obj[]) : unit =
         match func with
-        | QueryBuilder.Write caller -> caller.DynamicInvoke (Array.append [|context:> obj|] parameters) |> ignore
+        | QueryBuilder.Write caller -> caller.DynamicInvoke [|context:> obj; parameters|] |> ignore
         | QueryBuilder.Read _       -> failwith "Execution of SELECT query from this method is not supported. Please use ExecuteSql<T>(string)"
 
-    let internal createExecutionContext (parameters: obj[]) : Expr.ExecutionContext =
+    let internal createExecutionContext () : Expr.ExecutionContext =
         { 
-            parameters = parameters
             currentIndex = 0
             parametersExpression = System.Linq.Expressions.Expression.Parameter(typeof<obj[]>, "parameters")
         }
@@ -32,14 +31,14 @@ module SqlExtensions =
         member this.ExecuteNonQuery(sql: string, [<ParamArray>] parameters: obj[]) =
             let query = SqlParser.parseSql sql
             this.WriteTransaction(fun (_rwCtx) -> 
-                let executionContext = createExecutionContext parameters
+                let executionContext = createExecutionContext ()
                 let func = QueryBuilder.buildQuery<'TSchema, unit> query executionContext _rwCtx.Schema
                 writeQueryExecution _rwCtx func parameters)
 
         member this.ExecSql<'TResult>(sql: string, [<ParamArray>] parameters: obj[]): ResizeArray<'TResult> voption =
             let query = SqlParser.parseSql sql
             this.ReadTransaction(fun (_rCtx) -> 
-                let executionContext = createExecutionContext parameters
+                let executionContext = createExecutionContext ()
                 let func = QueryBuilder.buildQuery<'TSchema, 'TResult> query executionContext _rCtx.Schema
                 readQueryExecution _rCtx func parameters)
 
@@ -47,6 +46,20 @@ module SqlExtensions =
         // StereoDB.SQL assumes cooperative transaction management, so the context is passed to the query execution function.
         member this.ExecSqlWithContext<'TResult>(context: ReadOnlyTsContext<'TSchema>, sql: string, [<ParamArray>] parameters: obj[]): ResizeArray<'TResult> voption =
             let query = SqlParser.parseSql sql
-            let executionContext = createExecutionContext parameters
+            let executionContext = createExecutionContext ()
             let func = QueryBuilder.buildQuery<'TSchema, 'TResult> query executionContext context.Schema
             readQueryExecution context func parameters
+
+        member this.PrepareExecSql<'TResult>(sql: string): Func<obj[], ResizeArray<'TResult> voption> =
+            let query = SqlParser.parseSql sql
+            let f = 
+                this.ReadTransaction(fun (_rCtx) -> 
+                    let executionContext = createExecutionContext ()
+                    let func = QueryBuilder.buildQuery<'TSchema, 'TResult> query executionContext _rCtx.Schema
+                    ValueSome (ResizeArray([|func|])))
+            let func = f.Value[0]
+            let result = 
+                fun parameters -> 
+                    this.ReadTransaction(fun (_rCtx) -> 
+                        readQueryExecution _rCtx func parameters)
+            result

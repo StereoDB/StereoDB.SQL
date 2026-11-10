@@ -7,7 +7,6 @@ open StereoDB.FSharp
 module Expr = 
 
     type internal ExecutionContext = {
-        parameters: obj[]
         mutable currentIndex: int
         parametersExpression: ParameterExpression
     }
@@ -15,8 +14,6 @@ module Expr =
     let internal consumeParameter (executionContext: ExecutionContext) : Expression =
         let startIndex = executionContext.currentIndex
         let endIndex = startIndex + 1
-        if endIndex > executionContext.parameters.Length then
-            failwithf "Not enough parameters provided. Expected %d, but only %d were provided." endIndex executionContext.parameters.Length
         let parameterValue = Expression.ArrayAccess(executionContext.parametersExpression, Expression.Constant(startIndex))
         executionContext.currentIndex <- endIndex
         parameterValue
@@ -456,7 +453,7 @@ module internal QueryBuilder =
                     | Some(WhereCondition(whereExpression)) -> 
                         let condition = expressionBuilder.buildFilterProjection executionContext tableEntityType whereExpression
                         let seqFilter = Expr.methodof <@ filter @>
-                        let filterExpression = Expression.Call(seqFilter.GetGenericMethodDefinition().MakeGenericMethod(tableEntityType), condition, Expression.Constant(executionContext.parameters), createTableScanExpression)
+                        let filterExpression = Expression.Call(seqFilter.GetGenericMethodDefinition().MakeGenericMethod(tableEntityType), condition, executionContext.parametersExpression, createTableScanExpression)
                         filterExpression
                     | _ -> createTableScanExpression
 
@@ -581,7 +578,7 @@ module internal QueryBuilder =
                 | Some(WhereCondition(whereExpression)) -> 
                     let condition = expressionBuilder.buildFilterProjection executionContext tableEntityType whereExpression
                     let seqFilter = Expr.methodof <@ filter @>
-                    let filterExpression = Expression.Call(seqFilter.GetGenericMethodDefinition().MakeGenericMethod(tableEntityType), condition, Expression.Constant(executionContext.parameters), createTableScanExpression)
+                    let filterExpression = Expression.Call(seqFilter.GetGenericMethodDefinition().MakeGenericMethod(tableEntityType), condition, executionContext.parametersExpression, createTableScanExpression)
                     filterExpression
                 | _ -> createTableScanExpression
 
@@ -589,8 +586,8 @@ module internal QueryBuilder =
             let seqIter = Expr.methodof <@ iter @>
             let resultExpression = Expression.Call(seqIter.GetGenericMethodDefinition().MakeGenericMethod(tableEntityType), updateProjectionExpresion, filteredResult)
             let letFunction = Expression.Block([| actualTable; tableScan |], actualTableAssignment, tableScanAssignment, resultExpression)
-            let resultLambdaType = typeof<System.Action<ReadWriteTsContext<'TSchema>>>
-            let writeTransaction = Expression.Lambda (resultLambdaType, letFunction, context)
+            let resultLambdaType = typeof<System.Action<ReadWriteTsContext<'TSchema>, obj[]>>
+            let writeTransaction = Expression.Lambda (resultLambdaType, letFunction, context, executionContext.parametersExpression)
             
             Write (writeTransaction.Compile())
         | DeleteQuery (tableNameOrAlias, fromClause, whereClause) ->
@@ -660,7 +657,7 @@ module internal QueryBuilder =
                 | Some(WhereCondition(whereExpression)) -> 
                     let condition = expressionBuilder.buildFilterProjection executionContext tableEntityType whereExpression
                     let seqFilter = Expr.methodof <@ filter @>
-                    let filterExpression = Expression.Call(seqFilter.GetGenericMethodDefinition().MakeGenericMethod(tableEntityType), condition, Expression.Constant(executionContext.parameters), createTableScanExpression)
+                    let filterExpression = Expression.Call(seqFilter.GetGenericMethodDefinition().MakeGenericMethod(tableEntityType), condition, executionContext.parametersExpression, createTableScanExpression)
                     filterExpression
                 | _ -> createTableScanExpression
 
@@ -668,7 +665,7 @@ module internal QueryBuilder =
             let seqIter = Expr.methodof <@ iterMaterialize @>
             let resultExpression = Expression.Call(seqIter.GetGenericMethodDefinition().MakeGenericMethod(tableEntityType), deleteProjectionExpresion, filteredResult)
             let letFunction = Expression.Block([| actualTable; tableScan |], actualTableAssignment, tableScanAssignment, resultExpression)
-            let resultLambdaType = typeof<System.Action<ReadWriteTsContext<'TSchema>>>
-            let writeTransaction = Expression.Lambda (resultLambdaType, letFunction, context)
+            let resultLambdaType = typeof<System.Action<ReadWriteTsContext<'TSchema>, obj[]>>
+            let writeTransaction = Expression.Lambda (resultLambdaType, letFunction, context, executionContext.parametersExpression)
             
             Write (writeTransaction.Compile())

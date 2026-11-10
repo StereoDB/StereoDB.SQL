@@ -1,4 +1,10 @@
 <Solution>
   <Project Path="StereoDB.Sql/StereoDB.Sql.fsproj" />
+  <Folder Name="/Éléments de solution/">
+    <File Path=".github/.workflow/build.yml" />
+    <File Path=".gitignore" />
+    <File Path="LICENSE" />
+    <File Path="README.md" />
+  </Folder>
   <Project Path="StereoDB.Sql.Tests/StereoDB.Sql.Tests.fsproj" />
 </Solution>
