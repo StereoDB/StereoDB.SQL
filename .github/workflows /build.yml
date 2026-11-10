@@ -1,0 +1,25 @@
+name: build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v2
+      with:
+        dotnet-version: 10.x.x
+    - name: Restore dependencies
+      run: dotnet restore StereoDB.sql.slnx
+    - name: Build
+      run: dotnet build StereoDB.sql.slnx --no-restore
+    - name: Test
+      run: dotnet test StereoDB.sql.slnx --filter CI!=disable --configuration Release --verbosity normal
