@@ -83,6 +83,9 @@ let ``Select filtered rows`` () = task {
 
     let booksCount6 = (db.ExecSql<SubBook> "SELECT Id, Quantity FROM Books WHERE Id > 3").Value.Count
     test <@ booksCount6 = 7 @>
+
+    let booksCount7 = (db.ExecSql<SubBook> ("SELECT Id, Quantity FROM Books WHERE Id > ?", 3)).Value.Count
+    test <@ booksCount7 = 7 @>
 }
 
 [<Fact>]
