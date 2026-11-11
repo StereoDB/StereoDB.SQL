@@ -1,10 +1,12 @@
 <Solution>
-  <Project Path="StereoDB.Sql/StereoDB.Sql.fsproj" />
   <Folder Name="/Éléments de solution/">
     <File Path=".github/.workflow/build.yml" />
     <File Path=".gitignore" />
     <File Path="LICENSE" />
     <File Path="README.md" />
   </Folder>
+  <Project Path="StereoDb.Sql.Benchmarks/StereoDb.Sql.Benchmarks.fsproj" Id="b771684a-d4d0-49a9-acd7-68fcacdd686d" />
+  <Project Path="StereoDb.Sql.Profiling/StereoDb.Sql.Profiling.fsproj" Id="324f0d99-6d35-40d7-be41-4cb48a91f9b7" />
   <Project Path="StereoDB.Sql.Tests/StereoDB.Sql.Tests.fsproj" />
+  <Project Path="StereoDB.Sql/StereoDB.Sql.fsproj" />
 </Solution>
