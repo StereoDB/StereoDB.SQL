@@ -94,31 +94,60 @@ module internal QueryBuilder =
         | Write of System.Delegate
         | Read of System.Delegate
 
-    type SchemaMetadata(schema) =
-        let schemaType = schema.GetType()
+    type TableMetadata = {
+        TableProperty: System.Reflection.PropertyInfo
+        EntityType: System.Type
+        KeyType: System.Type
+        TableInterfaceType: System.Type
+        TableExpression: Expression
+    }
+
+    let tryGetTableColumn metadata columnName = 
+        let columnProperty = metadata.EntityType.GetProperty(columnName)
+        if not (isNull columnProperty) then
+            Some columnProperty
+        else None
+
+    type SchemaMetadata<'TSchema>(schema: 'TSchema, contextType: System.Type, useTable: System.Reflection.MethodInfo, tableInterfaceType: System.Type) =
+        let schemaType = typeof<'TSchema>
+        let tableMetadataCache = System.Collections.Concurrent.ConcurrentDictionary<string, TableMetadata>()
         
-        member this.TryGetTable tableName = 
-            let schemaProperty = schemaType.GetProperty(tableName)
-            if not (isNull schemaProperty) then
-                let propertyType = schemaProperty.PropertyType
-                let propertyTypeInterfaces = propertyType.GetInterfaces()
-                let tableEntityType = schemaProperty.PropertyType.GenericTypeArguments[0].GenericTypeArguments[1]
-                let keyType = schemaProperty.PropertyType.GenericTypeArguments[0].GenericTypeArguments[0]
-                Some (schemaProperty, tableEntityType, keyType)
-            else None
+        let context = Expression.Parameter(contextType, "context")
+        let schemaAccess = Expression.Property(context, "Schema")
         
-        member this.GetTable tableName = 
-            match this.TryGetTable tableName with
-            | Some (schemaProperty, tableEntityType, keyType) -> (schemaProperty, tableEntityType, keyType) 
+        member this.TryGetTableMetadata tableName = 
+            match tableMetadataCache.TryGetValue(tableName) with
+            | true, metadata -> 
+                Some metadata
+            | false, _ ->
+                let schemaProperty = schemaType.GetProperty(tableName)
+                if not (isNull schemaProperty) then
+                    let propertyType = schemaProperty.PropertyType
+                    let tableEntityType = propertyType.GenericTypeArguments[0].GenericTypeArguments[1]
+                    let keyType = propertyType.GenericTypeArguments[0].GenericTypeArguments[0]
+                    let tablePropertyAccess = Expression.Property(schemaAccess, schemaType.GetProperty(tableName))
+                    let tet = schemaType.GetProperty(tableName).PropertyType.GetProperty("Table")
+                    let tableExpression: Expression = Expression.Property(tablePropertyAccess, tet)
+                    let tableInterfaceType = tableInterfaceType.GetGenericTypeDefinition().MakeGenericType(keyType, tableEntityType)
+                    let tableMetadata = { 
+                        TableProperty = schemaProperty
+                        EntityType = tableEntityType
+                        KeyType = keyType
+                        TableInterfaceType = tableInterfaceType
+                        TableExpression = tableExpression
+                    }
+                    tableMetadataCache.TryAdd(tableName, tableMetadata) |> ignore
+                    Some tableMetadata
+                else None
+
+        member this.GetTableMetadata(tableName) = 
+            match this.TryGetTableMetadata tableName with
+            | Some metadata -> metadata
             | None -> failwith $"Table {tableName} was not found"
         
         member this.TryGetTableColumn(tableName, columnName) = 
-            this.TryGetTable tableName
-                |> Option.bind (fun (tableProperty, entityType, keyType) -> 
-                        let columnProperty = entityType.GetProperty(columnName)
-                        if not (isNull columnProperty) then
-                            Some columnProperty
-                        else None)
+            this.TryGetTableMetadata tableName
+                |> Option.bind (fun metadata -> tryGetTableColumn metadata columnName)
         
         member this.GetTableColumn(tableName, columnName) = 
             let column = 
@@ -126,6 +155,31 @@ module internal QueryBuilder =
                 | Some c -> c
                 | None -> failwith $"Column {columnName} does not exist in table {tableName}"
             column
+
+        // Generates ctx.Schema.Books.Table expression from "Books" table name
+        member this.GetTableExpression(tableName) =
+            match this.TryGetTableMetadata tableName with
+            | Some metadata -> metadata.TableExpression
+            | None -> failwith $"Table {tableName} was not found"
+
+        member this.GetTableInterfaceType(tableName) =
+            match this.TryGetTableMetadata tableName with
+            | Some metadata -> metadata.TableInterfaceType
+            | None -> failwith $"Table {tableName} was not found"
+
+        // Generates ctx.UseTable(ctx.Schema.Books.Table) expression from "Books" table name
+        member this.GetTableAccessor(tableName) =
+            match this.TryGetTableMetadata tableName with
+            | Some metadata -> 
+                let useTableMethod = useTable.GetGenericMethodDefinition().MakeGenericMethod(schemaType, metadata.KeyType, metadata.EntityType)
+                let tableAccessor = Expression.Call(useTableMethod, context, metadata.TableExpression)
+                tableAccessor
+            | None -> failwith $"Table {tableName} was not found"
+
+        member this.SchemaType = schemaType
+
+        member this.Context = context
+
 
     let iter<'T> (action: System.Action<'T>) (seq: 'T voption seq) =
         Seq.iter (fun x ->
@@ -155,9 +209,9 @@ module internal QueryBuilder =
         Seq.take count seq
 
     let sortWith (comparer: System.Comparison<'T>) (seq: 'T voption seq) =
-        Seq.sortWith (fun x y -> match(x,y) with | ValueSome(x), ValueSome(y) -> comparer.Invoke(x,y) | _ -> 0) seq    
+        Seq.sortWith (fun x y -> match(x,y) with | ValueSome(x), ValueSome(y) -> comparer.Invoke(x,y) | _ -> 0) seq
 
-    let buildTableScan tableType tableEntityType keyType =
+    let buildTableScan (tableType: System.Type) tableEntityType keyType =
         let rot = typeof<IReadOnlyTable<_, _>>.GetGenericTypeDefinition().MakeGenericType(keyType, tableEntityType)
 
         // Build Table scan
@@ -190,27 +244,29 @@ module internal QueryBuilder =
         scope.aliases.Add(alias, tableName)
 
     let resolveAlias scope alias =
-        let mutable resolved = Unchecked.defaultof<string>
-        if scope.aliases.TryGetValue(alias, &resolved) then
-            resolved
-        else
-            alias
+        match scope.aliases.TryGetValue (alias) with
+        | true, resolved -> resolved
+        | false, _ -> alias
 
-    type ExpressionBuilder(tableName:string, queryScope: QueryScope, metadata:SchemaMetadata) = class
-        let (table, tableEntityType, keyType) = metadata.GetTable tableName
+    type ExpressionBuilder<'TSchema>(tableName:string, queryScope: QueryScope, metadata: SchemaMetadata<'TSchema>) = class
+        let tableMetadata = metadata.TryGetTableMetadata tableName |> Option.defaultWith (fun () -> failwith $"Table {tableName} is not defined")
 
         member this.GetExpressionType(expr) =
             match expr with
             | Primitive primitive ->
                 match primitive with
                 | SqlIdentifier (tableAlias, ident) ->
-                    match tableAlias with
-                    | Some tableAlias ->
-                        let resolvedTableName = resolveAlias queryScope tableAlias
-                        let (_, tableEntityType, _) = metadata.GetTable resolvedTableName
-                        tableEntityType.GetProperty(ident).PropertyType
-                    | None ->
-                        tableEntityType.GetProperty(ident).PropertyType // failwithf "Cannot get type for expression %s" ident
+                    let resolvedMetadata = 
+                        match tableAlias with
+                        | Some tableAlias ->
+                            let resolvedTableName = resolveAlias queryScope tableAlias
+                            let tableMetadata = metadata.GetTableMetadata resolvedTableName
+                            tableMetadata
+                        | None ->
+                            tableMetadata
+
+                    let property = tryGetTableColumn resolvedMetadata ident |> Option.defaultWith (fun () -> failwithf "Cannot get type for expression %s" ident)
+                    property.PropertyType // failwithf "Cannot get type for expression %s" ident
                 | SqlFloatConstant _ -> typeof<float>
                 | SqlIntConstant _ -> typeof<int>
                 | SqlUnnamedBinding -> typeof<obj>
@@ -236,7 +292,7 @@ module internal QueryBuilder =
             | Primitive primitive ->
                 match primitive with
                 | SqlFloatConstant c -> Expression.Constant(c, typeof<float>)
-                | SqlIntConstant c -> if keyType = typeof<int> then Expression.Constant(c |> int, typeof<int>) else Expression.Constant(c, typeof<int64>)
+                | SqlIntConstant c -> if tableMetadata.KeyType = typeof<int> then Expression.Constant(c |> int, typeof<int>) else Expression.Constant(c, typeof<int64>)
                 | SqlIdentifier (tableAlias, identifier) ->
                     match tableAlias with
                     | Some tableAlias ->
@@ -298,9 +354,7 @@ module internal QueryBuilder =
             updateProjectionExpresion
         end       
 
-    let buildQuery<'TSchema, 'TResult> (query: Query) executionContext schema =
-        let metadata = SchemaMetadata(schema)
-        let schemaType = typeof<'TSchema>
+    let buildQuery<'TSchema, 'TResult> (query: Query) (executionContext: Expr.ExecutionContext) schema : QueryExecution =
         let queryScope = { aliases = System.Collections.Generic.Dictionary<string, string>() }
         match query with
         | SelectQuery (sel, body) ->
@@ -316,13 +370,20 @@ module internal QueryBuilder =
             //         |> Seq.map (fun id -> entity.Get id)
             //    
             // let actualTable = ctx.UseTable(ctx.Schema.Books.Table)
-            // tableScan actualTable
+            // let tableScan = tableScan actualTable
+            // let filteredResult = 
+            //     tableScan
             //     |> Seq.filter whereFilter
+            // let sorderResult = 
+            //     filteredResult
             //     |> Seq.orderBy orderByFunction
+            // let result = 
+            //     sorderResult
             //     |> Seq.map selectProjection
             let contextType = typeof<ReadOnlyTsContext<'TSchema>>
-            let context = Expression.Parameter(contextType, "context")
-            let schemaAccess = Expression.Property(context, "Schema")
+            let useTable = Expr.methodof <@ ReadOnlyTsContextExt.UseTable @>
+            let tableInterfaceType = typeof<IReadOnlyTable<_, _>>
+            let metadata = SchemaMetadata<'TSchema>(schema, contextType, useTable, tableInterfaceType)
 
             match body with
             | Some (fromClause, whereClause, orderClause) ->
@@ -334,17 +395,17 @@ module internal QueryBuilder =
                         | None -> ()
                         tableName
                 let expressionBuilder = ExpressionBuilder(tableName, queryScope, metadata)
-                let (table, tableEntityType, keyType) = 
-                    match metadata.TryGetTable tableName with
+                let tableMetadata = 
+                    match metadata.TryGetTableMetadata tableName with
                     | Some t -> t
                     | None -> failwith $"Table {tableName} is not defined"
+                let (tableEntityType, keyType) = (tableMetadata.EntityType, tableMetadata.KeyType)
 
                 let buildSelectProjection () =
-                    // Build Update projection
-                    // let updateProjection = fun row -> 
-                    //   row.Quantity = 100
-                    //   ()
-                    let row = Expression.Parameter(tableEntityType, "row");
+                    // Build Select projection
+                    // let selectProjection = fun row -> 
+                    //   new SubBook(row.prop1, row.prop2, row.prop3)
+                    let row = Expression.Parameter(tableEntityType, "row")
                     let namedSelect = 
                         sel |> snd
                             |> List.map (fun x ->
@@ -361,12 +422,12 @@ module internal QueryBuilder =
                             |> List.concat
 
                     let selectProjectionType = typeof<'TResult>
-                    let updateBlock: Expression = 
+                    let selectBlock: Expression = 
                         let constructorParameters =
                             selectProjectionType.GetProperties() |> Array.map (fun prop -> 
                                 let shouldBeUpdated = namedSelect |> Seq.tryFind (fun (alias, expr) -> alias = prop.Name)
                                 match shouldBeUpdated with
-                                | Some (column, expression) -> 
+                                | Some (_column, expression) -> 
                                     let newValueExpression = expressionBuilder.buildExpression executionContext row expression
                                     newValueExpression
                                 | None -> Expression.Property(row, prop)
@@ -375,9 +436,9 @@ module internal QueryBuilder =
                         let createNew = Expression.New(constructor, constructorParameters)
                         createNew
 
-                    let updateLambdaType = (typeof<System.Func<_, _>>).GetGenericTypeDefinition().MakeGenericType(tableEntityType, selectProjectionType)
-                    let updateProjectionExpresion = Expression.Lambda (updateLambdaType, updateBlock, row)
-                    updateProjectionExpresion
+                    let selectLambdaType = (typeof<System.Func<_, _>>).GetGenericTypeDefinition().MakeGenericType(tableEntityType, selectProjectionType)
+                    let selectProjectionExpresion = Expression.Lambda (selectLambdaType, selectBlock, row)
+                    selectProjectionExpresion
 
                 let buildSortFunction (sortExpressions: (SqlExpression * OrderDirection) list) =
                     // Build Sort function
@@ -425,20 +486,16 @@ module internal QueryBuilder =
                     let sortFunctionExpresion = Expression.Lambda (comparisonLambdaType, sortBlock, a, b)
                     sortFunctionExpresion
 
-                let tablePropertyAccess = Expression.Property(schemaAccess, schemaType.GetProperty(tableName))
-                let tet = schemaType.GetProperty(tableName).PropertyType.GetProperty("Table")
-                let tableExpression: Expression = Expression.Property(tablePropertyAccess, tet)
-                let useTable = Expr.methodof <@ ReadOnlyTsContextExt.UseTable @>
-                let useTableMethod = useTable.GetGenericMethodDefinition().MakeGenericMethod(schemaType, keyType, tableEntityType)
-                let tableAccessor = Expression.Call(useTableMethod, context, tableExpression)
-                let rot = typeof<IReadOnlyTable<_, _>>.GetGenericTypeDefinition().MakeGenericType(keyType, tableEntityType)
+                let rot = metadata.GetTableInterfaceType(tableName)
+                let tableAccessor = metadata.GetTableAccessor(tableName)
                 let actualTable = Expression.Variable(rot, "actualTable");
                 let actualTableAssignment = Expression.Assign(actualTable, tableAccessor)
 
-                let tableScanExpresion = buildTableScan rot tableEntityType keyType
                 let selectProjection = buildSelectProjection ()
 
                 // Create table scan
+                // let tableScan = tableScan actualTable
+                let tableScanExpresion = buildTableScan rot tableEntityType keyType
                 let tableScanResultType = typeof<seq<_>>.GetGenericTypeDefinition().MakeGenericType(typeof<obj voption>.GetGenericTypeDefinition().MakeGenericType(tableEntityType))
                 let tableScan = Expression.Variable(typeof<System.Func<_, _>>.GetGenericTypeDefinition().MakeGenericType(rot, tableScanResultType), "tableScan");
                 let tableScanAssignment = Expression.Assign(tableScan, tableScanExpresion)
@@ -447,7 +504,10 @@ module internal QueryBuilder =
                 let createNew = Expression.New(resultsetType)
                 let result = Expression.Variable(resultsetType, "result");
                 let resultAssignment = Expression.Assign(result, createNew)
-
+                
+                // let filteredResult = 
+                //     tableScan
+                //     |> Seq.filter whereFilter
                 let filteredResult : Expression =
                     match whereClause with
                     | Some(WhereCondition(whereExpression)) -> 
@@ -456,7 +516,10 @@ module internal QueryBuilder =
                         let filterExpression = Expression.Call(seqFilter.GetGenericMethodDefinition().MakeGenericMethod(tableEntityType), condition, executionContext.parametersExpression, createTableScanExpression)
                         filterExpression
                     | _ -> createTableScanExpression
-
+                    
+                // let sorderResult = 
+                //     filteredResult
+                //     |> Seq.orderBy orderByFunction
                 let sorderResult : Expression =
                     match orderClause with
                     | Some(SortOrder(sortExpressions)) ->
@@ -480,11 +543,15 @@ module internal QueryBuilder =
                 let addRangeCall = Expression.Call(result, resultsetType.GetMethod("AddRange"), resultExpression);
                 let letFunction = Expression.Block([| result; actualTable; tableScan |], actualTableAssignment, tableScanAssignment, resultAssignment, addRangeCall, result)
                 let resultLambdaType = typeof<System.Func<ReadOnlyTsContext<'TSchema>, obj[], obj>>
-                let lambdaParameters = [| context; executionContext.parametersExpression |]
+                let lambdaParameters = [| metadata.Context; executionContext.parametersExpression |]
                 let readTransaction = Expression.Lambda (resultLambdaType, letFunction, lambdaParameters)
                 Read (readTransaction.Compile())
             | None -> failwith "SELECT without FROM not yet supported"
         | UpdateQuery (tableNameOrAlias, set, fromClause, whereClause) ->
+            let contextType = typeof<ReadWriteTsContext<'TSchema>>
+            let useTable = Expr.methodof <@ ReadWriteTsContextExt.UseTable<_,_,_> @>
+            let tableInterfaceType = typeof<IReadWriteTable<_, _>>
+            let metadata = SchemaMetadata<'TSchema>(schema, contextType, useTable, tableInterfaceType)
             let tableName =
                 match fromClause with
                 | Some (resultset) -> 
@@ -495,13 +562,13 @@ module internal QueryBuilder =
                         | None -> ()
                         resolveAlias queryScope tableNameOrAlias
                 | None -> tableNameOrAlias
-            let (table, tableEntityType, keyType) = 
-                match metadata.TryGetTable tableName with
+            let tableMetadata = 
+                match metadata.TryGetTableMetadata tableName with
                 | Some t -> t
                 | None -> failwith $"Table {tableName} is not defined"
+            let (tableEntityType, keyType) = (tableMetadata.EntityType, tableMetadata.KeyType)
             let expressionBuilder = ExpressionBuilder(tableName, queryScope, metadata)
-            let contextType = typeof<ReadWriteTsContext<'TSchema>>
-            let rwt = typeof<IReadWriteTable<_, _>>.GetGenericTypeDefinition().MakeGenericType(keyType, tableEntityType)
+            let rwt = metadata.GetTableInterfaceType(tableName)
 
             let buildUpdateProjection actualTable =
                 // Build Update projection
@@ -553,21 +620,14 @@ module internal QueryBuilder =
             // tableScan actualTable
             //     |> Seq.filter whereFilter
             //     |> Seq.iter updateProjection
-            let context = Expression.Parameter(contextType, "context")
-            let schemaAccess = Expression.Property(context, "Schema")
-            let tablePropertyAccess = Expression.Property(schemaAccess, schemaType.GetProperty(tableName))
-            let tet = schemaType.GetProperty(tableName).PropertyType.GetProperty("Table")
-            let tableExpression: Expression = Expression.Property(tablePropertyAccess, tet)
-            let useTable = Expr.methodof <@ ReadWriteTsContextExt.UseTable<_,_,_> @>
-            let useTableMethod = useTable.GetGenericMethodDefinition().MakeGenericMethod(schemaType, keyType, tableEntityType)
-            let tableAccessor = Expression.Call(useTableMethod, context, tableExpression)
+            let tableAccessor = metadata.GetTableAccessor(tableName)
             let actualTable = Expression.Variable(rwt, "actualTable");
             let actualTableAssignment = Expression.Assign(actualTable, tableAccessor)
 
             let updateProjectionExpresion = buildUpdateProjection actualTable
-            let tableScanExpresion = buildTableScan rwt tableEntityType keyType
 
             // Create table scan
+            let tableScanExpresion = buildTableScan rwt tableEntityType keyType
             let tableScanResultType = typeof<seq<_>>.GetGenericTypeDefinition().MakeGenericType(typeof<obj voption>.GetGenericTypeDefinition().MakeGenericType(tableEntityType))
             let tableScan = Expression.Variable(typeof<System.Func<_, _>>.GetGenericTypeDefinition().MakeGenericType(rwt, tableScanResultType), "tableScan");
             let tableScanAssignment = Expression.Assign(tableScan, tableScanExpresion)
@@ -587,10 +647,14 @@ module internal QueryBuilder =
             let resultExpression = Expression.Call(seqIter.GetGenericMethodDefinition().MakeGenericMethod(tableEntityType), updateProjectionExpresion, filteredResult)
             let letFunction = Expression.Block([| actualTable; tableScan |], actualTableAssignment, tableScanAssignment, resultExpression)
             let resultLambdaType = typeof<System.Action<ReadWriteTsContext<'TSchema>, obj[]>>
-            let writeTransaction = Expression.Lambda (resultLambdaType, letFunction, context, executionContext.parametersExpression)
+            let writeTransaction = Expression.Lambda (resultLambdaType, letFunction, metadata.Context, executionContext.parametersExpression)
             
             Write (writeTransaction.Compile())
         | DeleteQuery (tableNameOrAlias, fromClause, whereClause) ->
+            let contextType = typeof<ReadWriteTsContext<'TSchema>>
+            let useTable = Expr.methodof <@ ReadWriteTsContextExt.UseTable<_,_,_> @>
+            let tableInterfaceType = typeof<IReadWriteTable<_, _>>
+            let metadata = SchemaMetadata<'TSchema>(schema, contextType, useTable, tableInterfaceType)
             let tableName =
                 match fromClause with
                 | Some (resultset) -> 
@@ -601,13 +665,13 @@ module internal QueryBuilder =
                         | None -> ()
                         resolveAlias queryScope tableNameOrAlias
                 | None -> tableNameOrAlias
-            let (table, tableEntityType, keyType) = 
-                match metadata.TryGetTable tableName with
+            let tableMetadata = 
+                match metadata.TryGetTableMetadata tableName with
                 | Some t -> t
                 | None -> failwith $"Table {tableName} is not defined"
+            let (tableEntityType, keyType) = (tableMetadata.EntityType, tableMetadata.KeyType)
             let expressionBuilder = ExpressionBuilder(tableName, queryScope, metadata)
-            let contextType = typeof<ReadWriteTsContext<'TSchema>>
-            let rwt = typeof<IReadWriteTable<_, _>>.GetGenericTypeDefinition().MakeGenericType(keyType, tableEntityType)
+            let rwt = metadata.GetTableInterfaceType(tableName)
 
             let buildDeleteProjection actualTable =
                 // Build Delete projection
@@ -632,21 +696,14 @@ module internal QueryBuilder =
             //     |> Seq.filter whereFilter
             //     |> Seq.toList
             //     |> Seq.iter deleteProjection
-            let context = Expression.Parameter(contextType, "context")
-            let schemaAccess = Expression.Property(context, "Schema")
-            let tablePropertyAccess = Expression.Property(schemaAccess, schemaType.GetProperty(tableName))
-            let tet = schemaType.GetProperty(tableName).PropertyType.GetProperty("Table")
-            let tableExpression: Expression = Expression.Property(tablePropertyAccess, tet)
-            let useTable = Expr.methodof <@ ReadWriteTsContextExt.UseTable<_,_,_> @>
-            let useTableMethod = useTable.GetGenericMethodDefinition().MakeGenericMethod(schemaType, keyType, tableEntityType)
-            let tableAccessor = Expression.Call(useTableMethod, context, tableExpression)
+            let tableAccessor = metadata.GetTableAccessor(tableName)
             let actualTable = Expression.Variable(rwt, "actualTable");
             let actualTableAssignment = Expression.Assign(actualTable, tableAccessor)
 
             let deleteProjectionExpresion = buildDeleteProjection actualTable
-            let tableScanExpresion = buildTableScan rwt tableEntityType keyType
 
             // Create table scan
+            let tableScanExpresion = buildTableScan rwt tableEntityType keyType
             let tableScanResultType = typeof<seq<_>>.GetGenericTypeDefinition().MakeGenericType(typeof<obj voption>.GetGenericTypeDefinition().MakeGenericType(tableEntityType))
             let tableScan = Expression.Variable(typeof<System.Func<_, _>>.GetGenericTypeDefinition().MakeGenericType(rwt, tableScanResultType), "tableScan");
             let tableScanAssignment = Expression.Assign(tableScan, tableScanExpresion)
@@ -661,11 +718,11 @@ module internal QueryBuilder =
                     filterExpression
                 | _ -> createTableScanExpression
 
-            // Apply update to each object
+            // Apply delete to each object
             let seqIter = Expr.methodof <@ iterMaterialize @>
             let resultExpression = Expression.Call(seqIter.GetGenericMethodDefinition().MakeGenericMethod(tableEntityType), deleteProjectionExpresion, filteredResult)
             let letFunction = Expression.Block([| actualTable; tableScan |], actualTableAssignment, tableScanAssignment, resultExpression)
             let resultLambdaType = typeof<System.Action<ReadWriteTsContext<'TSchema>, obj[]>>
-            let writeTransaction = Expression.Lambda (resultLambdaType, letFunction, context, executionContext.parametersExpression)
+            let writeTransaction = Expression.Lambda (resultLambdaType, letFunction, metadata.Context, executionContext.parametersExpression)
             
             Write (writeTransaction.Compile())
